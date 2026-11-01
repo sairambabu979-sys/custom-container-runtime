@@ -27,7 +27,8 @@ does what it does, including the bugs and CVEs that shaped the design.
 
 ## Quick start
 
-You need Linux 5.14+, Rust 1.88+, and root.
+You need Linux 5.14+ and root. `rust-toolchain.toml` pins the Rust version that development
+and CI use; the minimum supported version is 1.88.
 
 ```bash
 cargo build --release -p hull-runtime-cli
@@ -67,9 +68,9 @@ Edit `/tmp/demo/config.json` to change what runs.
 | Integration | 17 scenarios against real namespaces: isolation, mounts, devices, IDs, signals, fd leaks, symlink attacks, cleanup after failure | `scripts/test-integration.sh` |
 | Differential | The same bundle under **runc** and hull; a probe inside the container compares capabilities, IDs, signal state, mounts, devices, rlimits and environment, and any difference fails the test | `scripts/test-integration.sh` |
 
-The differential tests already caught three behaviour gaps that hand-written assertions missed:
-`HOME` not defaulted from `/etc/passwd`, read-only filesystems with a writable superblock, and a
-probe that hid its own `SIGPIPE` state. [Chapter 5](docs/learn/05-testing-a-runtime.md) tells the
+The differential tests have already caught five behaviour gaps that hand-written assertions
+missed. Two of them only showed up on CI's systemd host: a container root that stayed a
+propagation slave of the host, and a missing `/dev/core`. [Chapter 5](docs/learn/05-testing-a-runtime.md) tells the
 story.
 
 ## Layout

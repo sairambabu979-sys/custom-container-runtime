@@ -55,6 +55,12 @@ pub fn create_default_devices(root: &SafeRoot, bind_from_host: bool) -> Result<(
         root.symlink(Path::new(target), Path::new(link))
             .context(|| format!("symlink {link} -> {target}"))?;
     }
+    // runc adds /dev/core when the host has /proc/kcore (this runs before pivot_root, so the
+    // path is the host's). The differential test on a CI host caught its absence.
+    if Path::new("/proc/kcore").exists() {
+        root.symlink(Path::new("/proc/kcore"), Path::new("/dev/core"))
+            .context(|| "symlink /dev/core -> /proc/kcore".into())?;
+    }
     // The container gets its own pseudo-terminal multiplexer from its private devpts instance.
     if root.resolve(Path::new("/dev/pts/ptmx")).is_ok() {
         root.symlink(Path::new("pts/ptmx"), Path::new("/dev/ptmx"))

@@ -23,6 +23,18 @@ time it ran:
 | `/sys` superblock `ro` under runc, `rw` under hull | `ro` on a *new* filesystem should make the superblock read-only too, not just the mount | `parse_mount` adds the `ro` superblock flag |
 | Device bind mounts in a different order | Cosmetic, but exact comparison needs a stable order | Same order as runc |
 
+Then the same tests ran in CI, on a GitHub Ubuntu runner, and found two more that the
+development machine could not show:
+
+| Difference | Cause | Fix |
+|---|---|---|
+| Container `/` was a slave of the host's root (`master:1` in mountinfo) | On a systemd host `/` is *shared*. A bind mount copies the propagation of its source, so the rootfs became a slave of the host. Host mounts under the bundle would have appeared inside the container. The dev machine's `/` is *private*, so the bug was invisible there | Make the rootfs's parent mount private before the self-bind, as runc does (`rootfs.rs`) |
+| runc adds `/dev/core -> /proc/kcore` | Only when the host has `/proc/kcore`, which the dev VM does not | Same condition in `devices.rs` |
+
+The first bug was reproduced locally with `mount --make-shared /` before it was fixed, and the
+suite now passes under both settings. Run your tests on more than one kind of host: your own
+machine's configuration is a hidden input.
+
 And one bug in the *test tool* itself: the probe is a Rust program, and the Rust runtime ignores
 `SIGPIPE` before `main`. The probe reported its own runtime's signal state, which happened to agree
 under both runtimes, so the comparison passed while the probe was blind. `#![no_main]` fixed it,

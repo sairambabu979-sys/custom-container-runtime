@@ -58,6 +58,11 @@ fn diff(path: &str, a: &Value, b: &Value, out: &mut Vec<String>) {
                 );
             }
         }
+        (Value::Array(x), Value::Array(y)) if x.len() == y.len() => {
+            for (i, (u, v)) in x.iter().zip(y).enumerate() {
+                diff(&format!("{path}/{i}"), u, v, out);
+            }
+        }
         _ if a != b => out.push(format!("{path}:\n    runc: {a}\n    hull: {b}")),
         _ => {}
     }

@@ -79,18 +79,17 @@ path) and add a tmpfs mount at `/data/x`. Run hull and check that `/tmp/victim/x
 created on the host, but `rootfs/tmp/victim/x` was. That is what the test
 `symlinked_mount_destination_cannot_escape_the_rootfs` automates.
 
-**3. Change hull: break it on purpose.** In `crates/hull-runtime/src/rootfs.rs`, remove the
-`mount_change(... DOWNSTREAM | REC)` call, then run `scripts/test-integration.sh`. What happens
-depends on your host, which is the point of the exercise:
+**3. Change hull: reproduce the bug CI found.** Do this in a throwaway VM, not on your laptop.
+Run `sudo mount --make-shared /` to make `/` behave like a systemd host. Then, in
+`crates/hull-runtime/src/rootfs.rs`, comment out the `make_parent_mount_private` call and run
+`scripts/test-integration.sh differential`. The diff shows the container's `/` with
+`optional: "master:1"`, meaning a slave of the host's root, while runc's has none. Restore the call
+and the test passes. Chapter 5 tells the story of how this was found.
 
-- If `findmnt -o PROPAGATION /` says **shared** (any systemd host), every test fails: the kernel
-  refuses `pivot_root` with `EINVAL` when the new root's parent mount is shared, precisely to stop
-  this kind of leak (see `pivot_root(2)`).
-- If it says **private** (as in hull's development sandbox), every test still passes and nothing
-  visibly breaks.
-
-So a runtime that "works on my machine" without this call is relying on host configuration it
-does not control. Put the call back.
+Never remove the recursive-slave `mount_change` call instead. On a host with a shared `/`, the
+container's later `umount2(MNT_DETACH)` of the old root would propagate to the host and unmount
+the host's own filesystems. Making the container's copy of the mount table a slave first is what
+makes it safe to tear down.
 
 **4. Change hull: support `linux.readonlyPaths`** (a piece of M4). For each path: resolve it
 through `SafeRoot`, `open_tree(OPEN_TREE_CLONE)` it, `mount_setattr(RDONLY)` the clone, and
