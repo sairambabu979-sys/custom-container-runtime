@@ -2,7 +2,7 @@
 
 > Working name: **hull**. Rename freely; it appears only in binary and crate names.
 >
-> Status: **M1 done; M0 done except a first green CI run** (see §14 and [STATUS.md](STATUS.md)). Decisions are recorded in §16.
+> Status: **M0 and M1 done**, CI green on x86_64 and aarch64 (see §14 and [STATUS.md](STATUS.md)). Decisions are recorded in §16.
 >
 > Confidence tags used in this document: **[C]** certain (verified or hard evidence),
 > **[L]** likely (strong inference, verify during implementation), **[G]** guess (estimate).
@@ -637,7 +637,7 @@ Each milestone ends with something demonstrable and a gate that an outside oracl
 
 | # | Milestone | Exit criterion (must be true to proceed) |
 |---|---|---|
-| **M0** ✅ (CI: verify first run) | Foundation: workspace, CI, lints, `hull-sys` skeleton, state store, spec validation, `spec` command, fixture fetcher (pinned busybox digests), `hull-probe` | CI green. `hull-runtime spec` output is accepted by `runc run` |
+| **M0** ✅ | Foundation: workspace, CI, lints, `hull-sys` skeleton, state store, spec validation, `spec` command, fixture fetcher (pinned busybox digests), `hull-probe` | CI green. `hull-runtime spec` output is accepted by `runc run` |
 | **M1** ✅ | Namespaces and rootfs: `clone3`, sync protocol, fd-based mounts, `/dev`, `pivot_root`, hostname, `execve` | `hull-runtime run` starts busybox. **Differential probe vs runc is clean** for namespaces and mountinfo. *Delivered beyond that: user namespaces, rlimits, user identity, `no_new_privs`, and a probe diff that also covers capabilities, signals, environment and `/dev`.* |
 | **M2** | Full OCI lifecycle: create/start/state/kill/delete/list/ps, exec FIFO, pidfds, locking, all hooks, console socket, `exec` | runtime-tools lifecycle, hooks and state tests pass. Fault-injection shows no leaks |
 | **M3** | Cgroups: v1 and v2 backends, device eBPF, pause/resume, update, events/stats, OOM | Shared cgroup suite passes on v1 (sandbox) and v2 (CI). runtime-tools resource tests pass |
