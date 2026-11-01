@@ -1,0 +1,25 @@
+# cargo-deny configuration: https://embarkstudios.github.io/cargo-deny/
+[graph]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu", "x86_64-unknown-linux-musl"]
+
+[advisories]
+version = 2
+yanked = "deny"
+
+[licenses]
+version = 2
+allow = ["Apache-2.0", "MIT", "BSD-3-Clause", "Unicode-3.0", "Apache-2.0 WITH LLVM-exception", "Zlib"]
+
+[bans]
+multiple-versions = "warn"
+deny = [
+  # rustls only: we never link OpenSSL.
+  { name = "openssl" },
+  { name = "openssl-sys" },
+  # No async runtime anywhere in the workspace (ADR-005).
+  { name = "tokio" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
