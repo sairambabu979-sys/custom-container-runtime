@@ -1,0 +1,30 @@
+[package]
+# The library is `hull-runtime`; package names must be unique, the binary name need not be.
+name = "hull-runtime-cli"
+description = "An OCI container runtime with a runc-compatible command line."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "hull-runtime"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+hull-runtime.workspace = true
+hull-spec.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+hull-testkit.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true
