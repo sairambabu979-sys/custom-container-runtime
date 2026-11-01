@@ -254,7 +254,7 @@ mod tests {
 
         dir.destroy().unwrap();
         assert!(matches!(store.load(&id), Err(Error::NotFound(_))));
-        assert!(store.list().unwrap().is_empty());
+        assert_eq!(store.list().unwrap(), Vec::new());
     }
 
     #[test]
