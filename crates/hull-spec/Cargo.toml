@@ -1,0 +1,18 @@
+[package]
+name = "hull-spec"
+description = "Loading and fail-closed validation of OCI runtime configs (config.json)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+hull-fs.workspace = true
+hull-sys.workspace = true
+oci-spec.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
