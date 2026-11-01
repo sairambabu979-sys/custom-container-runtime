@@ -2,7 +2,7 @@
 
 > Working name: **hull**. Rename freely; it appears only in binary and crate names.
 >
-> Status: **plan, awaiting sign-off**. Nothing below is implemented yet.
+> Status: **M1 done; M0 done except a first green CI run** (see §14 and [STATUS.md](STATUS.md)). Decisions are recorded in §16.
 >
 > Confidence tags used in this document: **[C]** certain (verified or hard evidence),
 > **[L]** likely (strong inference, verify during implementation), **[G]** guess (estimate).
@@ -61,7 +61,10 @@ These are out of scope by design, not deferred:
 
 ---
 
-## 2. Architecture decisions (summaries; full ADRs live in `docs/adr/`)
+## 2. Architecture decisions
+
+These summaries are the ADRs for now. They move to `docs/adr/` when one needs more room than a
+section.
 
 ### ADR-001: Rust, not Go and not C
 
@@ -615,7 +618,8 @@ job is optional.
 
 ## 13. Code quality bar
 
-- Edition 2024. MSRV is pinned and bumped deliberately, never by accident.
+- Edition 2024. MSRV is pinned (currently 1.88, for let-chains), checked in CI, and bumped
+  deliberately, never by accident.
 - `#![forbid(unsafe_code)]` in every crate except `hull-sys`, and every `unsafe` block carries a
   `// SAFETY:` comment (`clippy::undocumented_unsafe_blocks = deny`).
 - `#![deny(missing_docs)]` on library crates. Module docs explain *why*, not *what*.
@@ -631,8 +635,8 @@ Each milestone ends with something demonstrable and a gate that an outside oracl
 
 | # | Milestone | Exit criterion (must be true to proceed) |
 |---|---|---|
-| **M0** | Foundation: workspace, CI, lints, `hull-sys` skeleton, state store, spec validation, `spec` command, fixture fetcher (pinned busybox/alpine digests), `hull-probe` | CI green. `hull-runtime spec` output is accepted by `runc run` |
-| **M1** | Namespaces and rootfs: `clone3`, sync protocol, fd-based mounts, `/dev`, `pivot_root`, hostname, `execve` | `hull-runtime run` starts busybox. **Differential probe vs runc is clean** for namespaces and mountinfo |
+| **M0** ✅ (CI: verify first run) | Foundation: workspace, CI, lints, `hull-sys` skeleton, state store, spec validation, `spec` command, fixture fetcher (pinned busybox digests), `hull-probe` | CI green. `hull-runtime spec` output is accepted by `runc run` |
+| **M1** ✅ | Namespaces and rootfs: `clone3`, sync protocol, fd-based mounts, `/dev`, `pivot_root`, hostname, `execve` | `hull-runtime run` starts busybox. **Differential probe vs runc is clean** for namespaces and mountinfo. *Delivered beyond that: user namespaces, rlimits, user identity, `no_new_privs`, and a probe diff that also covers capabilities, signals, environment and `/dev`.* |
 | **M2** | Full OCI lifecycle: create/start/state/kill/delete/list/ps, exec FIFO, pidfds, locking, all hooks, console socket, `exec` | runtime-tools lifecycle, hooks and state tests pass. Fault-injection shows no leaks |
 | **M3** | Cgroups: v1 and v2 backends, device eBPF, pause/resume, update, events/stats, OOM | Shared cgroup suite passes on v1 (sandbox) and v2 (CI). runtime-tools resource tests pass |
 | **M4** | Security: capabilities, NNP, seccomp (Moby default), masked/ro paths, rlimits, sysctls, LSM labels, memfd self-clone, `ProcfsHandle` | **Full runtime-tools suite passes, subject to the reviewed skip list.** `podman --runtime` smoke tests pass. CVE suite passes |
@@ -662,12 +666,23 @@ about 40% of that, and that is where most of the risk sits.
 
 ---
 
-## 16. Decisions needed before M0
+## 16. Decisions (resolved 2026-11-01)
 
-1. **Language:** Rust (recommended, ADR-001). Go or C would change §2–§4 substantially.
-2. **Goal and audience:** portfolio, learning, or something you will actually run. This decides
-   whether M5 (rootless) and M8 (networking) are in or out of scope.
-3. **Name:** `hull` is a placeholder.
-4. **License:** Apache-2.0 is recommended. It matches runc, containerd, youki and the OCI specs.
-5. **cgroup v1:** keep it (recommended, because without it limits cannot be verified in this
-   environment) or drop it and verify cgroups only in CI.
+| Decision | Outcome |
+|---|---|
+| Goal and audience | **Learning.** Every milestone ships with a chapter in [`docs/learn/`](learn/README.md), with exercises that change the code and are judged by tests. Milestones stay in scope, but each is cut so that it can be understood in one sitting. |
+| Language | Rust (ADR-001) |
+| Name | `hull` |
+| License | Apache-2.0 |
+| cgroup v1 | Kept (ADR-003): the development sandbox is a v1 hybrid |
+
+### What "learning" changes in this plan
+
+- **Readable over clever.** Module docs explain *why*, including the CVE or bug behind a design.
+  When a test catches a real bug, the story goes into the learning chapter.
+- **Exercises are part of the deliverable.** Each chapter ends with "change hull" tasks. Some
+  intentionally preview the next milestone (for example joining a network namespace, or
+  `--detach`), so you can implement the first slice of a milestone yourself before reading the
+  full version.
+- **Mutation-check the tests.** A test that has never been seen failing is not trusted. Chapter 5
+  shows the case that made this rule necessary.
