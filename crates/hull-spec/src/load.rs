@@ -99,6 +99,6 @@ mod tests {
     #[test]
     fn default_config_has_no_unknown_fields() {
         let loaded = parse(crate::DEFAULT_CONFIG_JSON).unwrap();
-        assert!(loaded.unknown_fields.is_empty(), "{:?}", loaded.unknown_fields);
+        assert_eq!(loaded.unknown_fields, Vec::<String>::new());
     }
 }

@@ -1,0 +1,6 @@
+# Pin the toolchain so that local builds and CI see the same compiler and the same lints.
+# New stable releases add clippy lints; bumping this is a deliberate, reviewed change.
+# (The MSRV, checked separately in CI, is `rust-version` in Cargo.toml.)
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]

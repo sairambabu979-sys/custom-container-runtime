@@ -311,7 +311,7 @@ mod tests {
             r#"{"destination":"/x","type":"tmpfs","options":["rw","relatime"]}"#,
         ))
         .unwrap();
-        assert!(parsed.recursive_attrs.is_empty());
+        assert_eq!(parsed.recursive_attrs, AttrChange::default());
         assert!(parsed.attrs.clear.contains(MountAttrs::RDONLY));
     }
 

@@ -6,6 +6,8 @@
 # What it does, and why each step is needed:
 #   1. Fetches the pinned busybox rootfs that containers run in.
 #   2. Builds hull-probe as a *static* binary, so it runs in any image regardless of its libc.
+#      (A static glibc build via +crt-static. The musl target does not link on aarch64 with
+#      current toolchains: compiler-builtins needs getauxval before libc is on the link line.)
 #   3. Runs the #[ignore]d tests as root. If you are not root, everything is built as you and only
 #      the test binaries run under `sudo` (via cargo's target runner setting).
 set -euo pipefail
@@ -13,17 +15,16 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 arch="$(uname -m)"
-musl_target="${arch}-unknown-linux-musl"
 host_target="${arch}-unknown-linux-gnu"
 
 scripts/fetch-rootfs.sh
 
-if ! rustup target list --installed 2>/dev/null | grep -qx "$musl_target"; then
-  rustup target add "$musl_target"
-fi
-cargo build --release -p hull-probe --target "$musl_target"
+# An explicit --target keeps the static probe's artifacts apart from the normal build, so the
+# extra RUSTFLAGS do not force everything else to rebuild.
+RUSTFLAGS="${RUSTFLAGS:-} -C target-feature=+crt-static" \
+  cargo build --release -p hull-probe --target "$host_target"
 
-export HULL_PROBE="$PWD/target/$musl_target/release/hull-probe"
+export HULL_PROBE="$PWD/target/$host_target/release/hull-probe"
 export HULL_TEST_ROOTFS="$PWD/.fixtures/busybox/rootfs"
 
 if [[ $EUID -ne 0 ]]; then
@@ -36,4 +37,5 @@ if ! command -v runc >/dev/null; then
   echo "test-integration: runc not found; the differential tests will fail (install runc)" >&2
 fi
 
-cargo test -p hull-runtime-cli -- --ignored "$@"
+# --no-fail-fast: show every failing test binary, not just the first.
+cargo test --no-fail-fast -p hull-runtime-cli -- --ignored "$@"

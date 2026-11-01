@@ -619,7 +619,9 @@ job is optional.
 ## 13. Code quality bar
 
 - Edition 2024. MSRV is pinned (currently 1.88, for let-chains), checked in CI, and bumped
-  deliberately, never by accident.
+  deliberately, never by accident. The *development* toolchain is pinned too
+  (`rust-toolchain.toml`), so a new stable release cannot turn CI red with a lint that nobody
+  saw locally. (That happened on the first CI run.)
 - `#![forbid(unsafe_code)]` in every crate except `hull-sys`, and every `unsafe` block carries a
   `// SAFETY:` comment (`clippy::undocumented_unsafe_blocks = deny`).
 - `#![deny(missing_docs)]` on library crates. Module docs explain *why*, not *what*.
