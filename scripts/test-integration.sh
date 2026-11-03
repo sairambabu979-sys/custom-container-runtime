@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Run hull's privileged integration tests.
 #
-# Usage: scripts/test-integration.sh [TEST FILTER...]
+# Usage: scripts/test-integration.sh [runtime|lifecycle|differential] [TEST NAME FILTER...]
+#
+#   scripts/test-integration.sh                      everything
+#   scripts/test-integration.sh lifecycle            one test file (bins/hull-runtime/tests/*.rs)
+#   scripts/test-integration.sh signal_state         tests whose name contains "signal_state"
 #
 # What it does, and why each step is needed:
 #   1. Fetches the pinned busybox rootfs that containers run in.
@@ -37,5 +41,12 @@ if ! command -v runc >/dev/null; then
   echo "test-integration: runc not found; the differential tests will fail (install runc)" >&2
 fi
 
+# A first argument naming a test file selects that file; everything else filters test names.
+test_file=()
+if [[ $# -gt 0 && -f "bins/hull-runtime/tests/$1.rs" ]]; then
+  test_file=(--test "$1")
+  shift
+fi
+
 # --no-fail-fast: show every failing test binary, not just the first.
-cargo test --no-fail-fast -p hull-runtime-cli -- --ignored "$@"
+cargo test --no-fail-fast -p hull-runtime-cli "${test_file[@]}" -- --ignored "$@"
