@@ -199,6 +199,113 @@ impl Hull {
     }
 }
 
+impl Hull {
+    /// Run `hull-runtime <args...>` and capture its output.
+    pub fn cmd(&self, args: &[&str]) -> Outcome {
+        let mut command = self.command();
+        command.args(args);
+        outcome(command)
+    }
+
+    /// Write the bundle's config and `create` it. The container's stdout and stderr go to
+    /// `bundle/output` (see [`Bundle::output`]); `create`'s own errors land there too.
+    ///
+    /// Pipes would not work here: the container inherits `create`'s stdout, so a pipe would stay
+    /// open long after `create` has exited, and reading it to the end would hang.
+    pub fn create(&self, bundle: &Bundle, id: &str) -> Outcome {
+        become_subreaper();
+        bundle.write();
+        let file = std::fs::File::create(bundle.output_path()).expect("create output file");
+        let status = self
+            .command()
+            .arg("create")
+            .arg("--bundle")
+            .arg(bundle.path())
+            .arg(id)
+            .stdin(Stdio::null())
+            .stdout(file.try_clone().expect("dup output file"))
+            .stderr(file)
+            .status()
+            .expect("spawn hull-runtime create");
+        Outcome {
+            code: status.code().unwrap_or(-1),
+            stdout: String::new(),
+            stderr: bundle.output(),
+        }
+    }
+
+    /// The container's state as JSON, or `None` if `state` fails (e.g. it was deleted).
+    pub fn state(&self, id: &str) -> Option<Value> {
+        let outcome = self.cmd(&["state", id]);
+        (outcome.code == 0).then(|| serde_json::from_str(&outcome.stdout).expect("state JSON"))
+    }
+
+    /// The PID of the container's init, from `state`.
+    pub fn pid(&self, id: &str) -> i32 {
+        let state = self.state(id).expect("container exists");
+        i32::try_from(state["pid"].as_i64().expect("pid")).expect("pid fits in i32")
+    }
+
+    /// `create`, `start`, wait for exit and `delete`. Returns the container's exit code and
+    /// output, like [`Hull::run`] does for `run`.
+    pub fn create_start_wait(&self, bundle: &Bundle, id: &str) -> Outcome {
+        self.create(bundle, id).assert_code(0);
+        let pid = self.pid(id);
+        self.cmd(&["start", id]).assert_code(0);
+        let code = wait_exit(pid);
+        self.cmd(&["delete", id]).assert_code(0);
+        Outcome { code, stdout: bundle.output(), stderr: String::new() }
+    }
+}
+
+impl Bundle {
+    /// Where [`Hull::create`] sends the container's output.
+    pub fn output_path(&self) -> PathBuf {
+        self.path().join("output")
+    }
+
+    /// Everything the container has written so far.
+    pub fn output(&self) -> String {
+        std::fs::read_to_string(self.output_path()).unwrap_or_default()
+    }
+}
+
+/// Make this test process a *child subreaper* (`PR_SET_CHILD_SUBREAPER`).
+///
+/// `hull-runtime create` exits while the container's init lives on, and an orphaned process is
+/// re-parented to its nearest subreaper ancestor, or to PID 1. Being that subreaper lets a test
+/// collect the container's exit code with `waitpid`, exactly as containerd's shim does (and as
+/// `hull-shim` will in M7).
+pub fn become_subreaper() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let me = rustix::process::getpid();
+        rustix::process::set_child_subreaper(Some(me)).expect("PR_SET_CHILD_SUBREAPER");
+    });
+}
+
+/// Wait (up to 10 s) for the orphaned container init `pid` to exit and return its exit code,
+/// using the shell convention of 128 + signal for a killed process.
+pub fn wait_exit(pid: i32) -> i32 {
+    use rustix::process::{Pid, WaitOptions};
+    let pid = Pid::from_raw(pid).expect("valid pid");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match rustix::process::waitpid(Some(pid), WaitOptions::NOHANG) {
+            Ok(Some((_, status))) => {
+                return status
+                    .exit_status()
+                    .or_else(|| status.terminating_signal().map(|s| 128 + s))
+                    .expect("process exited or was killed");
+            }
+            Ok(None) => {}
+            Err(e) => panic!("waitpid({pid:?}) failed: {e} (is this test process its subreaper?)"),
+        }
+        assert!(std::time::Instant::now() < deadline, "process {pid:?} did not exit within 10 s");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 /// Whether a `runc` binary is available for differential tests.
 pub fn runc_available() -> bool {
     Command::new("runc").arg("--version").output().is_ok_and(|o| o.status.success())

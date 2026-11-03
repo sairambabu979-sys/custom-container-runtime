@@ -6,7 +6,8 @@
 //!
 //! | Module | Responsibility |
 //! |---|---|
-//! | [`run`] | Parent side: validate, register, `clone3`, supervise, clean up |
+//! | [`run`] | Parent side of `run` and `create`: validate, register, `clone3`, supervise |
+//! | [`lifecycle`] | `start`, `kill`, `delete` on an existing container |
 //! | `init` | Child side: everything between `clone3` and `execve` |
 //! | [`sync`] | The message protocol between the two |
 //! | `rootfs`, `mounts`, `devices` | Building the container's `/` and switching to it |
@@ -20,6 +21,7 @@ mod error;
 mod id;
 mod idmap;
 mod init;
+pub mod lifecycle;
 mod mounts;
 mod process;
 mod procfs;

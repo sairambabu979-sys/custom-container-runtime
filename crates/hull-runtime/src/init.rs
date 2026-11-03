@@ -25,6 +25,9 @@ pub(crate) struct ChildContext<'a> {
     pub spec: &'a Spec,
     pub rootfs: RootfsPlan,
     pub sync: SyncSocket,
+    /// For `create`: the descriptor number of an `O_PATH` handle to `exec.fifo`, inherited from
+    /// the parent. `None` for `run`, which execs as soon as setup is done.
+    pub exec_fifo: Option<i32>,
 }
 
 /// Entry point of the child after `clone3`. Never returns.
@@ -38,8 +41,11 @@ pub(crate) fn child_main(ctx: &ChildContext<'_>) -> ! {
             exit_code: None,
         },
     };
-    // If the parent is gone, there is nobody to tell; exit either way.
-    let _ = ctx.sync.send(&ChildMessage::Failed(error.clone()));
+    // After `create` has returned, the parent is gone and the socket is closed. Then the only
+    // place left to report to is the container's own stderr (the caller of `create`'s stderr).
+    if ctx.sync.send(&ChildMessage::Failed(error.clone())).is_err() {
+        eprintln!("hull-runtime: container init failed during {}: {}", error.stage, error.message);
+    }
     hull_sys::exec::exit_immediately(error.exit_code.unwrap_or(1))
 }
 
@@ -58,12 +64,44 @@ fn run(ctx: &ChildContext<'_>) -> Result<Infallible, InitError> {
     })?;
     let plan = crate::process::prepare(process).map_err(at(Stage::Process))?;
 
+    // From here on the container must outlive the runtime process: `create` exits as soon as it
+    // reads Ready. A parent-death signal still armed at that moment would kill the container.
+    rustix::process::set_parent_process_death_signal(None).map_err(|e| {
+        at(Stage::Process)(Error::Io {
+            context: "clear parent-death signal".into(),
+            source: e.into(),
+        })
+    })?;
     ctx.sync.send(&ChildMessage::Ready).map_err(|e| InitError {
         stage: Stage::Exec,
         message: e.to_string(),
         exit_code: None,
     })?;
+    if let Some(fifo) = ctx.exec_fifo {
+        wait_for_start(fifo).map_err(at(Stage::Start))?;
+    }
     Err(exec(&plan))
+}
+
+/// Block until `hull-runtime start` opens the read end of the exec FIFO, then tell it we are going.
+///
+/// The FIFO lives in the state directory on the host, which no path can reach after `pivot_root`.
+/// The parent therefore opened it with `O_PATH` before `clone3`. That descriptor still refers to
+/// the FIFO, and reopening it through the `/proc/self/fd` magic link turns it into a real write end.
+/// (This is the one place where following a magic link is the point, so it does not go through
+/// `SafeRoot`.) Opening a FIFO for writing blocks until there is a reader, and that blocking *is*
+/// the wait for `start`.
+fn wait_for_start(fifo: i32) -> Result<()> {
+    use std::io::Write as _;
+    let path = format!("/proc/self/fd/{fifo}");
+    let mut file = loop {
+        match std::fs::OpenOptions::new().write(true).open(&path) {
+            Ok(file) => break file,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e).context(|| format!("reopen exec FIFO via {path}")),
+        }
+    };
+    file.write_all(b"0").context(|| "signal start over the exec FIFO".into())
 }
 
 /// Wait for the parent, then take on the namespace's identity and hostname.
@@ -109,8 +147,6 @@ fn join_parent(ctx: &ChildContext<'_>) -> Result<()> {
 
 /// The point of no return. Only returns (with the error) if `execve` fails.
 fn exec(plan: &ExecPlan) -> InitError {
-    // From here on the container must not die just because the runtime does.
-    let _ = rustix::process::set_parent_process_death_signal(None);
     // A clean signal state: nothing ignored, nothing blocked (see hull_sys::signal for why).
     hull_sys::signal::reset_dispositions();
     if let Err(e) = hull_sys::signal::set_mask(&SigSet::empty()) {

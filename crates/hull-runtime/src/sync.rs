@@ -52,6 +52,8 @@ pub enum Stage {
     Rootfs,
     /// Applying rlimits, user identity, working directory.
     Process,
+    /// Created, waiting for `hull-runtime start`.
+    Start,
     /// Executing the user's program.
     Exec,
 }
@@ -62,6 +64,7 @@ impl fmt::Display for Stage {
             Self::Namespaces => "namespace setup",
             Self::Rootfs => "root filesystem setup",
             Self::Process => "process setup",
+            Self::Start => "wait for start",
             Self::Exec => "exec",
         })
     }

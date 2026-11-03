@@ -129,3 +129,23 @@ fn writable_root_and_extra_mounts_match_runc() {
     });
     compare(&mut bundle, "mounts");
 }
+
+#[test]
+#[ignore = "needs root, fixtures and runc: run scripts/test-integration.sh"]
+fn create_then_start_matches_runc_run() {
+    // `create` + `start` take a different path through init (the exec FIFO, an extra wait, an
+    // extra inherited descriptor). The container must not be able to tell.
+    assert!(runc_available(), "runc is required for differential tests (apt install runc)");
+    let mut bundle = Bundle::new();
+    bundle.probe();
+    let runc = normalize(runc_run(&bundle, &unique_id("lifecycle-runc")).assert_code(0).json());
+    let hull = Hull::new(HULL).create_start_wait(&bundle, &unique_id("lifecycle-hull"));
+    let hull = normalize(hull.assert_code(0).json());
+    let mut differences = Vec::new();
+    diff("", &runc, &hull, &mut differences);
+    assert!(
+        differences.is_empty(),
+        "hull (create+start) and runc disagree:\n{}",
+        differences.join("\n")
+    );
+}

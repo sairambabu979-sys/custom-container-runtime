@@ -326,6 +326,7 @@ name = "hull-testkit"
 version = "0.1.0"
 dependencies = [
  "hull-spec",
+ "rustix",
  "serde_json",
  "tempfile",
 ]

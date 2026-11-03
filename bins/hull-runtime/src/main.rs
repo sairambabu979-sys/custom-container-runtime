@@ -14,7 +14,8 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use hull_runtime::run::{RunOptions, run};
+use hull_runtime::lifecycle;
+use hull_runtime::run::{RunOptions, create, run};
 use hull_runtime::{ContainerId, Error, StateStore, render_chain};
 
 /// Exit code for failures of the runtime itself (as opposed to the container's own exit code).
@@ -75,9 +76,47 @@ enum Command {
         /// Abort if container setup takes longer than this many seconds.
         #[arg(long, default_value_t = 60)]
         setup_timeout: u64,
-        /// Detach from the container (not implemented until milestone M2).
+        /// Detach from the container (an exercise: see docs/learn/06-the-lifecycle.md).
         #[arg(long, short)]
         detach: bool,
+        /// The container ID.
+        id: String,
+    },
+    /// Create a container whose process waits for `start`.
+    Create {
+        /// The bundle directory (containing config.json).
+        #[arg(long, short, default_value = ".")]
+        bundle: PathBuf,
+        /// Write the container init's PID to this file.
+        #[arg(long)]
+        pid_file: Option<PathBuf>,
+        /// Abort if container setup takes longer than this many seconds.
+        #[arg(long, default_value_t = 60)]
+        setup_timeout: u64,
+        /// The container ID.
+        id: String,
+    },
+    /// Start the process of a created container.
+    Start {
+        /// The container ID.
+        id: String,
+    },
+    /// Send a signal to a container's init process.
+    Kill {
+        /// Signal every process in the container (needs cgroups, milestone M3).
+        #[arg(long, short)]
+        all: bool,
+        /// The container ID.
+        id: String,
+        /// The signal, by name (TERM, SIGKILL) or number (15).
+        #[arg(default_value = "TERM")]
+        signal: String,
+    },
+    /// Remove a stopped (or never started) container.
+    Delete {
+        /// Kill the container first if it is running.
+        #[arg(long, short)]
+        force: bool,
         /// The container ID.
         id: String,
     },
@@ -127,8 +166,37 @@ fn execute(command: Command, store: &StateStore) -> hull_runtime::Result<ExitCod
             Ok(ExitCode::SUCCESS)
         }
         Command::Run { detach: true, .. } => Err(Error::Unsupported(
-            "--detach is not implemented yet (planned for milestone M2)".into(),
+            "--detach is not implemented yet; it is an exercise in docs/learn/06-the-lifecycle.md \
+             (create + start do the same thing in two steps)"
+                .into(),
         )),
+        Command::Create { bundle, pid_file, setup_timeout, id } => {
+            let options = RunOptions {
+                id: ContainerId::new(&id)?,
+                bundle,
+                pid_file,
+                setup_timeout: Duration::from_secs(setup_timeout),
+            };
+            create(store, &options)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Start { id } => {
+            lifecycle::start(store, &ContainerId::new(&id)?)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Kill { all: true, .. } => Err(Error::Unsupported(
+            "kill --all needs to find every process in the container, which means its cgroup \
+             (milestone M3)"
+                .into(),
+        )),
+        Command::Kill { all: false, id, signal } => {
+            lifecycle::kill(store, &ContainerId::new(&id)?, lifecycle::parse_signal(&signal)?)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Command::Delete { force, id } => {
+            lifecycle::delete(store, &ContainerId::new(&id)?, force)?;
+            Ok(ExitCode::SUCCESS)
+        }
         Command::Run { bundle, pid_file, setup_timeout, detach: false, id } => {
             let options = RunOptions {
                 id: ContainerId::new(&id)?,

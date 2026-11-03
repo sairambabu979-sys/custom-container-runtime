@@ -5,6 +5,7 @@
 //!   <id>/                 (mode 0700)
 //!     lock                flock(2)ed by whichever hull-runtime process is changing the container
 //!     state.json          the OCI state, replaced atomically
+//!     exec.fifo           exists between `create` and `start` (see `lifecycle`)
 //! ```
 //!
 //! `/run` is a tmpfs, so state disappears on reboot, exactly like the containers it describes.
@@ -132,6 +133,15 @@ impl StateStore {
         }
     }
 
+    /// Lock an existing container for a change (`start`, `delete`).
+    pub fn open(&self, id: &ContainerId) -> Result<ContainerDir> {
+        let path = self.root.join(id.as_str());
+        if !path.join("state.json").exists() {
+            return Err(Error::NotFound(id.to_string()));
+        }
+        ContainerDir::lock(id, path)
+    }
+
     /// Read a container's state (without locking) and refresh its status.
     pub fn load(&self, id: &ContainerId) -> Result<State> {
         let path = self.root.join(id.as_str()).join("state.json");
@@ -175,9 +185,9 @@ impl StateStore {
 pub struct ContainerDir {
     id: ContainerId,
     path: PathBuf,
-    // Held only for its lock. The lock is released when the descriptor is closed, which also
-    // happens automatically if this process dies, so a crash can never leave a container locked.
-    _lock: OwnedFd,
+    // Held for its lock. `Drop` releases the lock explicitly (see there). If this process crashes,
+    // the kernel releases it when the last copy of the descriptor is closed.
+    lock: OwnedFd,
 }
 
 impl ContainerDir {
@@ -190,7 +200,7 @@ impl ContainerDir {
         )
         .context(|| format!("open {}", lock_path.display()))?;
         match rustix::fs::flock(&fd, FlockOperation::NonBlockingLockExclusive) {
-            Ok(()) => Ok(Self { id: id.clone(), path, _lock: fd }),
+            Ok(()) => Ok(Self { id: id.clone(), path, lock: fd }),
             Err(Errno::WOULDBLOCK) => Err(Error::Locked(id.to_string())),
             Err(e) => Err(e).context(|| format!("lock {}", lock_path.display())),
         }
@@ -204,6 +214,11 @@ impl ContainerDir {
     /// The directory path.
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// The FIFO that holds a created container's init until `start`.
+    pub fn exec_fifo(&self) -> PathBuf {
+        self.path.join("exec.fifo")
     }
 
     /// Persist `state` atomically.
@@ -221,11 +236,27 @@ impl ContainerDir {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+impl Drop for ContainerDir {
+    /// Release the lock explicitly instead of relying on `close`.
+    ///
+    /// A `flock` lock belongs to the open file *description*, and `clone3` gives the container's
+    /// init a copy of our descriptor for it. Closing our copy would not release the lock while
+    /// init still holds its copy, and a `create`d init holds it until `start` lets it `execve`.
+    /// So `start` would wait for a lock that only it can cause to be released. `LOCK_UN` acts on
+    /// the description itself, so it releases the lock no matter who else holds a descriptor.
+    /// (The first manual test of `create` + `start` deadlocked exactly like this.)
+    fn drop(&mut self) {
+        let _ = rustix::fs::flock(&self.lock, FlockOperation::Unlock);
+    }
+}
 
-    fn state(id: &str) -> State {
+/// Helpers shared by unit tests in this crate.
+#[cfg(test)]
+pub(crate) mod tests_support {
+    use super::{BTreeMap, State, Status};
+
+    /// A minimal `State` for tests.
+    pub(crate) fn state(id: &str) -> State {
         State {
             oci_version: "1.1.0".into(),
             id: id.into(),
@@ -238,6 +269,12 @@ mod tests {
             init_start_time: None,
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tests_support::state;
 
     #[test]
     fn create_save_load_list_destroy() {
