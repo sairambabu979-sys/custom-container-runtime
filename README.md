@@ -9,7 +9,7 @@ $ sudo hull-runtime run --bundle ./demo web
 pid=1 host=hull uid=0
 ```
 
-> **Status: milestone M1 of 9.** `hull-runtime run` starts a real OCI container (namespaces,
+> **Status: milestone M2 of 9 in progress.** `hull-runtime run` starts a real OCI container (namespaces,
 > user namespaces, fd-based mounts, `pivot_root`, devices, rlimits, user identity), and the
 > differential tests show it behaving like runc in every scenario they cover. It is **not a
 > security boundary yet**: there is no
@@ -21,7 +21,7 @@ pid=1 host=hull uid=0
 This is a learning project, and the code is written to be read. Every module explains *why* it
 does what it does, including the bugs and CVEs that shaped the design.
 
-- Start with **[docs/learn/](docs/learn/README.md)**: five chapters that walk through the code,
+- Start with **[docs/learn/](docs/learn/README.md)**: six chapters that walk through the code,
   each with exercises.
 - The roadmap and architecture are in **[docs/PLAN.md](docs/PLAN.md)**.
 
@@ -57,6 +57,10 @@ Edit `/tmp/demo/config.json` to change what runs.
 |---|---|
 | `hull-runtime spec [--bundle DIR]` | Write a default `config.json` |
 | `hull-runtime run [--bundle DIR] [--pid-file F] ID` | Create the container and run it in the foreground |
+| `hull-runtime create [--bundle DIR] [--pid-file F] ID` | Set the container up; its process waits for `start` |
+| `hull-runtime start ID` | Let a created container's process run |
+| `hull-runtime kill ID [SIGNAL]` | Signal the container's init (default `TERM`) |
+| `hull-runtime delete [--force] ID` | Remove a stopped container (`--force` kills a running one) |
 | `hull-runtime state ID` | Print the OCI state as JSON |
 | `hull-runtime list [--format json] [-q]` | List containers |
 
@@ -65,7 +69,7 @@ Edit `/tmp/demo/config.json` to change what runs.
 | Layer | What | Command |
 |---|---|---|
 | Unit | Parsers, validation, path resolution, the sync protocol, symlink-escape attempts | `cargo test --workspace` |
-| Integration | 17 scenarios against real namespaces: isolation, mounts, devices, IDs, signals, fd leaks, symlink attacks, cleanup after failure | `scripts/test-integration.sh` |
+| Integration | 26 scenarios against real namespaces: isolation, mounts, devices, IDs, signals, fd leaks, symlink attacks, cleanup after failure, and the create/start/kill/delete lifecycle | `scripts/test-integration.sh` |
 | Differential | The same bundle under **runc** and hull; a probe inside the container compares capabilities, IDs, signal state, mounts, devices, rlimits and environment, and any difference fails the test | `scripts/test-integration.sh` |
 
 The differential tests have already caught five behaviour gaps that hand-written assertions

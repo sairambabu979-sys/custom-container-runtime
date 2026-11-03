@@ -1,6 +1,6 @@
 # Learning track
 
-Five chapters, in the order the code runs. Each chapter has three parts:
+Six chapters, in the order the code runs. Each chapter has three parts:
 
 1. **The idea**: what the kernel offers and why a container runtime needs it.
 2. **Read the code**: where hull does it, and which decisions are subtle.
@@ -13,6 +13,7 @@ Five chapters, in the order the code runs. Each chapter has three parts:
 | 3 | [The root filesystem](03-root-filesystem.md) | Mount propagation, the fd-based mount API, symlink attacks, `pivot_root` |
 | 4 | [The process](04-the-process.md) | The parent/child protocol, the order of privilege drops, the signal and fd traps |
 | 5 | [Testing a runtime](05-testing-a-runtime.md) | Differential testing against runc, and the bugs it found in this code |
+| 6 | [The lifecycle](06-the-lifecycle.md) | `create`/`start`/`kill`/`delete`, the exec FIFO, who reaps a container, PID reuse |
 
 ## How to use this
 

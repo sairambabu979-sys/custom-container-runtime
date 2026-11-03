@@ -21,7 +21,7 @@ security feature someone asked for is worse than not running.
 | `process.ioPriority`, `scheduler`, `execCPUAffinity` | Rejected | unscheduled |
 | `hostname`, `domainname` | Supported (require a UTS namespace) | M1 |
 | `linux.namespaces` (all 8 types, newly created) | Supported | M1 |
-| `linux.namespaces[].path` (join existing) | Rejected | M2 |
+| `linux.namespaces[].path` (join existing) | Rejected | M2, left as an exercise (`docs/learn/02-namespaces.md`) |
 | `linux.uidMappings`, `gidMappings` | Supported (as root; rootless via `newuidmap` in M5) | M1 |
 | `linux.rootfsPropagation` | Supported | M1 |
 | `linux.timeOffsets` | Rejected | M2 |
@@ -38,13 +38,16 @@ security feature someone asked for is worse than not running.
 | Command | Status |
 |---|---|
 | `spec`, `run`, `state`, `list` | Supported |
-| `run --detach`, `create`, `start`, `kill`, `delete`, `exec`, `ps`, `features` | M2 |
+| `create`, `start`, `kill` (by name or number), `delete [--force]` | Supported |
+| `run --detach` | M2, left as an exercise (`docs/learn/06-the-lifecycle.md`) |
+| `exec`, `ps`, `features` | M2 |
+| `kill --all` | M3 (needs the container's cgroup to find every process) |
 | `pause`, `resume`, `update`, `events` | M3 |
 
 ## Behaviour that matches runc (verified by the differential tests)
 
-Under the default config, a non-root user, a user namespace, and extra tmpfs and bind mounts, the
-container sees the same capability sets, `no_new_privs`, seccomp mode, blocked and ignored signals,
+Under the default config, a non-root user, a user namespace, extra tmpfs and bind mounts, and
+`create` + `start` instead of `run`, the container sees the same capability sets, `no_new_privs`, seccomp mode, blocked and ignored signals,
 umask, UIDs, GIDs and groups, environment (including `HOME`), rlimits, `/dev` contents, and the
 same mount table, entry by entry. Two known differences are listed in
 `bins/hull-runtime/tests/differential.rs`.

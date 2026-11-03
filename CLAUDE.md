@@ -7,12 +7,13 @@ exercises that the owner implements over large changes they only read.
 ## Where things stand
 
 - Milestones M0 and M1 are done (`hull-runtime run`, namespaces, mounts, `pivot_root`, process
-  setup). CI is green on x86_64 and aarch64.
+  setup). M2 is in progress: `create`/`start`/`kill`/`delete` are done; `exec`, hooks, the
+  console socket, `ps` and `features` remain. CI is green on x86_64 and aarch64.
 - Read first: `docs/PLAN.md` (architecture, ADRs in §2, milestones in §14, decisions in §16),
   then `docs/STATUS.md` (what each config.json field does today), then `docs/learn/`.
-- Suggested next step for the owner: exercises in `docs/learn/02-namespaces.md` #4 (join an
-  existing network namespace) and `docs/learn/04-the-process.md` #4 (`run --detach`). Both are the
-  first slice of M2. Review their attempt rather than writing it for them.
+- Suggested next step for the owner: `docs/learn/06-the-lifecycle.md` exercise 3 (`run --detach`)
+  and `docs/learn/02-namespaces.md` exercise 4 (`linux.namespaces[].path`). Both are reserved for
+  the owner: review their attempt rather than writing it for them.
 - Active branch: `claude/quirky-ride-6c8z0x` (currently the repository's default branch).
 
 ## Rules the code depends on
@@ -33,7 +34,7 @@ exercises that the owner implements over large changes they only read.
 2. `RUSTFLAGS="-D warnings" cargo clippy --workspace --all-targets`
 3. `cargo test --workspace`
 4. `scripts/test-integration.sh` (needs root and `runc`; runs real containers and the runc
-   differential tests)
+   differential tests). `scripts/test-integration.sh lifecycle` runs one test file.
 5. `cargo +1.88 check --workspace --all-targets` (MSRV)
 6. New behaviour has an integration test, and a differential test against runc where runc
    implements the same feature. Mutation-check new tests: break the code, see the test fail.
@@ -42,6 +43,5 @@ exercises that the owner implements over large changes they only read.
 
 ## Known open items
 
-- PRs #1 and #2 (Copilot lint fixes) are redundant with commit `ebb51f8` and can be closed.
 - The development toolchain is pinned in `rust-toolchain.toml`; bump it deliberately, together
   with the version in `.github/workflows/ci.yml`.

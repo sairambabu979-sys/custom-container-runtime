@@ -20,7 +20,7 @@ The goal, once M4 is complete, is that a hostile process with root inside the co
 read or write host files outside its mounts, see or signal host processes, change the host's
 mounts, gain privileges the config did not grant, or exhaust host resources beyond its limits.
 
-## What is defended today (M1)
+## What is defended today (M1 and the M2 lifecycle)
 
 These are structural defences: they remove a class of bug rather than patching one instance.
 
@@ -31,7 +31,8 @@ These are structural defences: they remove a class of bug rather than patching o
 | A host file descriptor leaks into the container and is used to escape the root, e.g. with `cwd=/proc/self/fd/N` (CVE-2024-21626) | Every descriptor ≥ 3 is made close-on-exec right before `execve`, and the working directory is checked for reachability after `chdir` | `crates/hull-sys/src/fd.rs`, `crates/hull-runtime/src/process.rs` |
 | The container opens `/proc/<init>/exe` (still the runtime binary until `execve`) or ptraces init during setup (the CVE-2019-5736 and CVE-2016-9962 classes) | Init is non-dumpable from `clone3` until `execve` | `crates/hull-runtime/src/init.rs` |
 | A config asks for a protection hull does not implement yet (seccomp, capabilities, masked paths, ...) and the container silently runs without it | Validation rejects such configs before anything is created, naming the milestone that adds the feature | `crates/hull-spec/src/validate.rs` |
-| A recycled PID makes `kill` or `delete` hit an unrelated process | The state file records the init's start time, every command re-checks it, and signals go through a pidfd, which cannot be recycled | `crates/hull-runtime/src/state.rs`, `crates/hull-runtime/src/run.rs` |
+| A recycled PID makes `kill` or `delete` hit an unrelated process | The state file records the init's start time, every command re-checks it, and signals go through a pidfd, which cannot be recycled | `crates/hull-runtime/src/state.rs`, `crates/hull-runtime/src/lifecycle.rs` |
+| The state lock or the exec FIFO handle leaks into the user's program | Both are close-on-exec, every descriptor ≥ 3 is marked close-on-exec before `execve`, and the lock is released explicitly because `clone3` shares it with init | `crates/hull-runtime/src/state.rs`, `crates/hull-runtime/src/init.rs` |
 | Signal state set by the runtime (blocked signals, ignored `SIGPIPE`) leaks into the container | Mask and dispositions are reset before `execve` | `crates/hull-sys/src/signal.rs` |
 
 Each row has at least one test that performs the attack or reproduces the leak. Several of them

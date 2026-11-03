@@ -75,6 +75,6 @@ have never seen fail is a test you have no reason to trust.
 `CAP_SYS_RESOURCE`). Remove the rejection in `validate.rs` and add a test. Then read
 `docs/PLAN.md` §5 for why M4 does this through a hardened procfs handle, not a plain path.
 
-**4. Change hull: implement `run --detach`** (a preview of M2). The parent must exit after `Ready`
-plus EOF without waiting, and the container must survive that. Which line in `init.rs` already
-makes survival possible? Who reaps the container when it exits?
+**4. Change hull: implement `run --detach`.** This exercise has moved to
+[chapter 6](06-the-lifecycle.md), exercise 3. Now that `create` and `start` exist, read that
+chapter first.
