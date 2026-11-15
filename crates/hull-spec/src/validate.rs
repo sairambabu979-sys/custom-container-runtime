@@ -3,7 +3,7 @@ use std::fmt;
 
 use crate::Milestone;
 use crate::mounts::{MountError, parse_mount};
-use crate::oci::{Linux, LinuxIdMapping, LinuxNamespaceType, Process, Spec};
+use crate::oci::{Hooks, Linux, LinuxIdMapping, LinuxNamespaceType, Process, Spec};
 
 /// One problem found in a config.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,7 +112,9 @@ pub fn validate(spec: &Spec) -> Result<(), ValidationErrors> {
         }
     }
 
-    c.unsupported(spec.hooks().is_some(), "hooks", Milestone::M2);
+    if let Some(hooks) = spec.hooks() {
+        check_hooks(&mut c, hooks);
+    }
     c.unsupported(
         spec.uid_mappings().is_some() || spec.gid_mappings().is_some(),
         "uidMappings/gidMappings (top level)",
@@ -132,6 +134,33 @@ pub fn validate(spec: &Spec) -> Result<(), ValidationErrors> {
     }
 
     if c.0.is_empty() { Ok(()) } else { Err(ValidationErrors(c.0)) }
+}
+
+fn check_hooks(c: &mut Checker, hooks: &Hooks) {
+    let phases = [
+        ("prestart", hooks.prestart()),
+        ("createRuntime", hooks.create_runtime()),
+        ("createContainer", hooks.create_container()),
+        ("startContainer", hooks.start_container()),
+        ("poststart", hooks.poststart()),
+        ("poststop", hooks.poststop()),
+    ];
+    for (phase, list) in phases {
+        for (i, hook) in list.iter().flatten().enumerate() {
+            let field = format!("hooks.{phase}[{i}]");
+            if !hook.path().is_absolute() {
+                c.invalid(&field, "path must be absolute");
+            }
+            if hook.timeout().is_some_and(|t| t <= 0) {
+                c.invalid(&field, "timeout must be greater than zero");
+            }
+            for var in hook.env().iter().flatten() {
+                if !var.contains('=') || var.starts_with('=') {
+                    c.invalid(&field, format!("env entry {var:?} is not of the form KEY=value"));
+                }
+            }
+        }
+    }
 }
 
 fn check_process(c: &mut Checker, process: &Process) {
@@ -329,6 +358,23 @@ mod tests {
         let err = validate(&s).unwrap_err();
         assert!(err.0.iter().all(|v| v.kind == ViolationKind::NotYetImplemented(Milestone::M4)));
         assert!(err.to_string().contains("planned for M4 (security)"));
+    }
+
+    #[test]
+    fn hooks_are_checked_not_rejected() {
+        let ok = spec(serde_json::json!({"hooks": {
+            "createRuntime": [{"path": "/bin/true", "args": ["true"], "env": ["A=b"], "timeout": 5}],
+            "poststop": [{"path": "/bin/true"}]
+        }}));
+        validate(&ok).unwrap();
+        let bad = spec(serde_json::json!({"hooks": {
+            "prestart": [{"path": "relative/hook"}],
+            "poststart": [{"path": "/bin/true", "timeout": 0, "env": ["NOEQUALS"]}]
+        }}));
+        assert_eq!(
+            fields(validate(&bad)),
+            ["hooks.prestart[0]", "hooks.poststart[0]", "hooks.poststart[0]"]
+        );
     }
 
     #[test]

@@ -29,7 +29,7 @@ security feature someone asked for is worse than not running.
 | `linux.seccomp`, `sysctl`, `maskedPaths`, `readonlyPaths`, `mountLabel`, `personality` | Rejected | M4 |
 | `linux.netDevices` | Rejected | M8 |
 | `linux.intelRdt`, `memoryPolicy` | Rejected | unscheduled |
-| `hooks` | Rejected | M2 |
+| `hooks` (all six phases, `args`, `env`, `timeout`) | Supported; dedicated integration and runc differential tests still to come | M2 |
 | `annotations` | Supported (recorded in state) | M1 |
 | Unknown properties | Ignored with a warning (the spec requires ignoring them) | — |
 

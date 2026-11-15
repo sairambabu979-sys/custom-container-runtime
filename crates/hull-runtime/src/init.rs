@@ -52,10 +52,30 @@ pub(crate) fn child_main(ctx: &ChildContext<'_>) -> ! {
 fn run(ctx: &ChildContext<'_>) -> Result<Infallible, InitError> {
     let at =
         |stage| move |e: Error| InitError { stage, message: render_chain(&e), exit_code: None };
+    let userns = ctx.rootfs.user_namespace;
 
-    join_parent(ctx).map_err(at(Stage::Namespaces))?;
-    crate::rootfs::setup(&ctx.rootfs, ctx.spec)
-        .map_err(|e| explain_userns_permission_error(e, ctx.rootfs.user_namespace))
+    let state = join_parent(ctx).map_err(at(Stage::Namespaces))?;
+    crate::rootfs::mount_all(&ctx.rootfs, ctx.spec)
+        .map_err(|e| explain_userns_permission_error(e, userns))
+        .map_err(at(Stage::Rootfs))?;
+
+    // The parent runs prestart and createRuntime hooks now, in its own namespaces.
+    ctx.sync.send(&ChildMessage::RootfsReady).map_err(|e| at(Stage::Hooks)(sync_failure(&e)))?;
+    match ctx.sync.recv::<ParentMessage>(None) {
+        Ok(Some(ParentMessage::RuntimeHooksDone)) => {}
+        Ok(_) => {
+            return Err(at(Stage::Hooks)(Error::Unsupported(
+                "runtime hooks did not complete".into(),
+            )));
+        }
+        Err(e) => return Err(at(Stage::Hooks)(sync_failure(&e))),
+    }
+    // createContainer: our namespaces, but before pivot_root, so its path resolves on the host.
+    crate::hooks::run(crate::hooks::Phase::CreateContainer, ctx.spec, &state)
+        .map_err(at(Stage::Hooks))?;
+
+    crate::rootfs::switch_root(&ctx.rootfs, ctx.spec)
+        .map_err(|e| explain_userns_permission_error(e, userns))
         .map_err(at(Stage::Rootfs))?;
     let process = ctx.spec.process().as_ref().ok_or_else(|| InitError {
         stage: Stage::Process,
@@ -77,13 +97,41 @@ fn run(ctx: &ChildContext<'_>) -> Result<Infallible, InitError> {
         message: e.to_string(),
         exit_code: None,
     })?;
-    if let Some(fifo) = ctx.exec_fifo {
-        wait_for_start(fifo).map_err(at(Stage::Start))?;
+
+    let start_hooks = || crate::hooks::run(crate::hooks::Phase::StartContainer, ctx.spec, &state);
+    match ctx.exec_fifo {
+        // `create`: wait for `start`, run startContainer hooks, and report the outcome to `start`.
+        Some(fifo) => {
+            let mut channel = wait_for_start(fifo).map_err(at(Stage::Start))?;
+            if let Err(e) = start_hooks() {
+                let error = at(Stage::Hooks)(e);
+                report_start(&mut channel, Err(&error.message));
+                return Err(error);
+            }
+            report_start(&mut channel, Ok(()));
+        }
+        // `run`: the parent is still listening on the sync socket.
+        None => start_hooks().map_err(at(Stage::Hooks))?,
     }
     Err(exec(&plan))
 }
 
-/// Block until `hull-runtime start` opens the read end of the exec FIFO, then tell it we are going.
+fn sync_failure(e: &crate::sync::SyncError) -> Error {
+    Error::Unsupported(format!("lost contact with the runtime: {e}"))
+}
+
+/// Tell `start` how starting went: `0` means "about to exec", `E<message>` means a
+/// startContainer hook failed. `start` turns the latter into its own error.
+fn report_start(channel: &mut std::fs::File, outcome: std::result::Result<(), &str>) {
+    use std::io::Write as _;
+    let message = match outcome {
+        Ok(()) => b"0".to_vec(),
+        Err(message) => [b"E".as_slice(), message.as_bytes()].concat(),
+    };
+    let _ = channel.write_all(&message);
+}
+
+/// Block until `hull-runtime start` opens the read end of the exec FIFO, and return the write end.
 ///
 /// The FIFO lives in the state directory on the host, which no path can reach after `pivot_root`.
 /// The parent therefore opened it with `O_PATH` before `clone3`. That descriptor still refers to
@@ -91,21 +139,20 @@ fn run(ctx: &ChildContext<'_>) -> Result<Infallible, InitError> {
 /// (This is the one place where following a magic link is the point, so it does not go through
 /// `SafeRoot`.) Opening a FIFO for writing blocks until there is a reader, and that blocking *is*
 /// the wait for `start`.
-fn wait_for_start(fifo: i32) -> Result<()> {
-    use std::io::Write as _;
+fn wait_for_start(fifo: i32) -> Result<std::fs::File> {
     let path = format!("/proc/self/fd/{fifo}");
-    let mut file = loop {
+    loop {
         match std::fs::OpenOptions::new().write(true).open(&path) {
-            Ok(file) => break file,
+            Ok(file) => return Ok(file),
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
             Err(e) => return Err(e).context(|| format!("reopen exec FIFO via {path}")),
         }
-    };
-    file.write_all(b"0").context(|| "signal start over the exec FIFO".into())
+    }
 }
 
-/// Wait for the parent, then take on the namespace's identity and hostname.
-fn join_parent(ctx: &ChildContext<'_>) -> Result<()> {
+/// Wait for the parent, then take on the namespace's identity and hostname. Returns the
+/// container state the parent sent, for the hooks init runs.
+fn join_parent(ctx: &ChildContext<'_>) -> Result<crate::State> {
     // If the runtime dies while we are half set up, die with it instead of lingering.
     rustix::process::set_parent_process_death_signal(Some(Signal::KILL))
         .context(|| "set parent-death signal".into())?;
@@ -114,13 +161,16 @@ fn join_parent(ctx: &ChildContext<'_>) -> Result<()> {
     rustix::process::set_dumpable_behavior(DumpableBehavior::NotDumpable)
         .context(|| "mark init non-dumpable".into())?;
 
-    match ctx.sync.recv::<ParentMessage>(None) {
-        Ok(Some(ParentMessage::Continue)) => {}
+    let state = match ctx.sync.recv::<ParentMessage>(None) {
+        Ok(Some(ParentMessage::Continue { state })) => *state,
+        Ok(Some(other)) => {
+            return Err(Error::Unsupported(format!("unexpected message from runtime: {other:?}")));
+        }
         Ok(None) => {
             return Err(Error::Unsupported("runtime exited before setup could continue".into()));
         }
         Err(e) => return Err(Error::Unsupported(e.to_string())),
-    }
+    };
 
     if ctx.rootfs.user_namespace {
         // Right after the maps are written we are an *unmapped* host root: full capabilities in
@@ -142,7 +192,7 @@ fn join_parent(ctx: &ChildContext<'_>) -> Result<()> {
         rustix::system::setdomainname(domain.as_bytes())
             .context(|| format!("setdomainname {domain:?}"))?;
     }
-    Ok(())
+    Ok(state)
 }
 
 /// The point of no return. Only returns (with the error) if `execve` fails.

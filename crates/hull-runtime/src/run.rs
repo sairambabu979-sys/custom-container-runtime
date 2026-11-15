@@ -79,8 +79,15 @@ pub struct RunOptions {
 pub fn run(store: &StateStore, options: &RunOptions) -> Result<i32> {
     let prepared = prepare(options)?;
     let dir = store.create(&options.id)?;
-    let result = run_registered(&dir, &prepared, options);
+    let mut state = initial_state(&dir, &prepared);
+    let result = run_registered(&dir, &mut state, &prepared, options);
     let cleanup = dir.destroy();
+    // poststop runs "after the container is deleted", i.e. after its state is gone, and only for
+    // a container that got far enough to be created.
+    if state.pid != 0 {
+        state.status = Status::Stopped;
+        crate::hooks::run(crate::hooks::Phase::Poststop, &prepared.spec, &state)?;
+    }
     let code = result?;
     cleanup?;
     Ok(code)
@@ -189,15 +196,20 @@ fn initial_state(dir: &ContainerDir, prepared: &Prepared) -> State {
     }
 }
 
-fn run_registered(dir: &ContainerDir, prepared: &Prepared, options: &RunOptions) -> Result<i32> {
-    let mut state = initial_state(dir, prepared);
-    dir.save(&state)?;
+fn run_registered(
+    dir: &ContainerDir,
+    state: &mut State,
+    prepared: &Prepared,
+    options: &RunOptions,
+) -> Result<i32> {
+    dir.save_config(&prepared.spec)?;
+    dir.save(state)?;
 
     // Block the forwarded signals *before* clone3, so that none can arrive in the gap between
     // the child existing and the signalfd being read. The child unblocks them before execve.
     let forwarded = SigSet::of(&FORWARDED_SIGNALS);
     let previous_mask = hull_sys::signal::block(&forwarded).context(|| "block signals".into())?;
-    let result = supervise_foreground(dir, &mut state, prepared, options, &forwarded);
+    let result = supervise_foreground(dir, state, prepared, options, &forwarded);
     let restore =
         hull_sys::signal::set_mask(&previous_mask).context(|| "restore signal mask".into());
     let code = result?;
@@ -216,14 +228,16 @@ fn supervise_foreground(
     let (mut init, sync) = spawn(dir, state, prepared, options, None)?;
 
     // Exec phase: EOF means execve succeeded and closed the child's (close-on-exec) socket.
-    match sync.recv::<ChildMessage>(Some(options.setup_timeout)) {
+    // (startContainer hooks run in between, inside the container.)
+    match sync.recv::<ChildMessage>(None) {
         Ok(None) => {}
         Ok(Some(ChildMessage::Failed(e))) => return Err(init.failed(e)),
-        Ok(Some(ChildMessage::Ready)) => {
-            return Err(Error::Unsupported("sync protocol violation: second Ready".into()));
+        Ok(Some(other)) => {
+            return Err(Error::Unsupported(format!("sync protocol violation: {other:?}")));
         }
         Err(e) => return Err(sync_error(&e)),
     }
+    crate::hooks::run(crate::hooks::Phase::Poststart, &prepared.spec, state)?;
 
     let status = init.wait_forwarding_signals(&signals)?;
     state.status = Status::Stopped;
@@ -233,6 +247,7 @@ fn supervise_foreground(
 
 fn create_registered(dir: &ContainerDir, prepared: &Prepared, options: &RunOptions) -> Result<()> {
     let mut state = initial_state(dir, prepared);
+    dir.save_config(&prepared.spec)?;
     dir.save(&state)?;
     let fifo = make_exec_fifo(&dir.exec_fifo())?;
     let (init, _sync) = spawn(dir, &mut state, prepared, options, Some(fifo.as_fd()))?;
@@ -292,7 +307,15 @@ fn spawn(
     // Close our copy of the child's end, or we would never see EOF on ours.
     drop(child_sock);
     let mut init = Init::new(child);
-    tracing::debug!(pid = init.child.pid.as_raw_nonzero().get(), "init process created");
+    let pid = init.child.pid.as_raw_nonzero().get();
+    tracing::debug!(pid, "init process created");
+
+    // Record init right away: hooks need its PID, and if this process dies during setup, a later
+    // `delete` can still find (and kill) it.
+    state.pid = pid;
+    state.init_start_time =
+        Some(ProcStat::read(pid).context(|| format!("read /proc/{pid}/stat"))?.start_time);
+    dir.save(state)?;
 
     if prepared.namespaces.contains(Namespaces::USER) {
         let linux = prepared.spec.linux().as_ref();
@@ -300,20 +323,34 @@ fn spawn(
         let gid = linux.and_then(|l| l.gid_mappings().clone()).unwrap_or_default();
         crate::idmap::write_id_maps(init.child.pid, &uid, &gid)?;
     }
-    parent_sock.send(&ParentMessage::Continue).map_err(|e| sync_error(&e))?;
+    let continue_message = ParentMessage::Continue { state: Box::new(state.clone()) };
+    parent_sock.send(&continue_message).map_err(|e| sync_error(&e))?;
 
-    // Setup phase: the child either reports Ready or explains why it failed.
+    // Mounts are in place: run prestart and createRuntime hooks here, in our own namespaces.
+    match parent_sock.recv::<ChildMessage>(Some(options.setup_timeout)) {
+        Ok(Some(ChildMessage::RootfsReady)) => {}
+        Ok(Some(ChildMessage::Failed(e))) => return Err(init.failed(e)),
+        Ok(Some(other)) => {
+            return Err(Error::Unsupported(format!("sync protocol violation: {other:?}")));
+        }
+        Ok(None) => return Err(Error::InitVanished(init.reap_description())),
+        Err(e) => return Err(sync_error(&e)),
+    }
+    crate::hooks::run(crate::hooks::Phase::Prestart, &prepared.spec, state)?;
+    crate::hooks::run(crate::hooks::Phase::CreateRuntime, &prepared.spec, state)?;
+    parent_sock.send(&ParentMessage::RuntimeHooksDone).map_err(|e| sync_error(&e))?;
+
+    // The rest of setup: the child either reports Ready or explains why it failed.
     match parent_sock.recv::<ChildMessage>(Some(options.setup_timeout)) {
         Ok(Some(ChildMessage::Ready)) => {}
         Ok(Some(ChildMessage::Failed(e))) => return Err(init.failed(e)),
+        Ok(Some(other)) => {
+            return Err(Error::Unsupported(format!("sync protocol violation: {other:?}")));
+        }
         Ok(None) => return Err(Error::InitVanished(init.reap_description())),
         Err(e) => return Err(sync_error(&e)),
     }
 
-    let pid = init.child.pid.as_raw_nonzero().get();
-    state.pid = pid;
-    state.init_start_time =
-        Some(ProcStat::read(pid).context(|| format!("read /proc/{pid}/stat"))?.start_time);
     state.status = if exec_fifo.is_some() { Status::Created } else { Status::Running };
     dir.save(state)?;
     if let Some(pid_file) = &options.pid_file {

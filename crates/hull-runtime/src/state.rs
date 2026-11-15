@@ -5,7 +5,11 @@
 //!   <id>/                 (mode 0700)
 //!     lock                flock(2)ed by whichever hull-runtime process is changing the container
 //!     state.json          the OCI state, replaced atomically
+//!     config.json         the validated config, copied at `create`
 //!     exec.fifo           exists between `create` and `start` (see `lifecycle`)
+//!
+//! Later commands read `config.json` from here, never from the bundle: editing or deleting the
+//! bundle after `create` must not change what `start`, `exec` or `delete` do.
 //! ```
 //!
 //! `/run` is a tmpfs, so state disappears on reboot, exactly like the containers it describes.
@@ -142,6 +146,15 @@ impl StateStore {
         ContainerDir::lock(id, path)
     }
 
+    /// The config stored at `create` time.
+    pub fn load_config(&self, id: &ContainerId) -> Result<hull_spec::oci::Spec> {
+        let path = self.root.join(id.as_str()).join("config.json");
+        let text = std::fs::read_to_string(&path).context(|| format!("read {}", path.display()))?;
+        serde_json::from_str(&text)
+            .map_err(io::Error::other)
+            .context(|| format!("parse {}", path.display()))
+    }
+
     /// Read a container's state (without locking) and refresh its status.
     pub fn load(&self, id: &ContainerId) -> Result<State> {
         let path = self.root.join(id.as_str()).join("state.json");
@@ -219,6 +232,15 @@ impl ContainerDir {
     /// The FIFO that holds a created container's init until `start`.
     pub fn exec_fifo(&self) -> PathBuf {
         self.path.join("exec.fifo")
+    }
+
+    /// Keep a copy of the validated config next to the state.
+    pub fn save_config(&self, spec: &hull_spec::oci::Spec) -> Result<()> {
+        let json = serde_json::to_vec_pretty(spec)
+            .map_err(io::Error::other)
+            .context(|| "serialize config".into())?;
+        hull_fs::atomic_write(&self.path, "config.json", &json)
+            .context(|| format!("write {}/config.json", self.path.display()))
     }
 
     /// Persist `state` atomically.

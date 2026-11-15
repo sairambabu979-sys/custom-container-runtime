@@ -39,9 +39,10 @@ const WAIT: Duration = Duration::from_secs(10);
 
 /// Start a `created` container: let its init `execve` the user's program.
 ///
-/// Opening the FIFO's read end unblocks init, which is waiting in `open(O_WRONLY)`. Init then
-/// writes one byte; reading it proves that init really proceeded (as opposed to having died), and
-/// removing the FIFO afterwards makes a second `start` impossible.
+/// Opening the FIFO's read end unblocks init, which is waiting in `open(O_WRONLY)`. Init then runs
+/// the `startContainer` hooks and answers over the FIFO: `0` means it is about to `execve`,
+/// `E<message>` means a hook failed. Removing the FIFO afterwards makes a second `start`
+/// impossible. Finally the `poststart` hooks run here, in the runtime's namespaces.
 pub fn start(store: &StateStore, id: &ContainerId) -> Result<()> {
     let dir = store.open(id)?;
     let mut state = store.load(id)?;
@@ -60,15 +61,20 @@ pub fn start(store: &StateStore, id: &ContainerId) -> Result<()> {
     let fifo =
         rustix::fs::open(&path, OFlags::RDONLY | OFlags::NONBLOCK | OFlags::CLOEXEC, Mode::empty())
             .context(|| format!("open {}", path.display()))?;
-    wait_for_byte(&fifo, &pidfd)?;
+    let answer = wait_for_answer(&fifo, &pidfd);
     std::fs::remove_file(&path).context(|| format!("remove {}", path.display()))?;
+    answer?;
 
     state.status = Status::Running;
-    dir.save(&state)
+    dir.save(&state)?;
+    let spec = store.load_config(id)?;
+    crate::hooks::run(crate::hooks::Phase::Poststart, &spec, &state)
 }
 
-fn wait_for_byte(fifo: &OwnedFd, pidfd: &OwnedFd) -> Result<()> {
+/// Read init's answer from the exec FIFO: everything it writes before closing its end.
+fn wait_for_answer(fifo: &OwnedFd, pidfd: &OwnedFd) -> Result<()> {
     let deadline = std::time::Instant::now() + WAIT;
+    let mut answer = Vec::new();
     loop {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
         if left.is_zero() {
@@ -81,22 +87,33 @@ fn wait_for_byte(fifo: &OwnedFd, pidfd: &OwnedFd) -> Result<()> {
             Ok(_) | Err(Errno::INTR) => {}
             Err(e) => return Err(e).context(|| "poll exec FIFO".into()),
         }
-        if fds[0].revents().contains(PollFlags::IN) {
-            let mut byte = [0u8; 1];
-            match rustix::io::read(fifo, &mut byte) {
-                Ok(1) => return Ok(()),
-                Ok(_) => {
-                    return Err(Error::InitVanished(
-                        "init closed the exec FIFO without starting".into(),
-                    ));
-                }
+        let fifo_events = fds[0].revents();
+        if fifo_events.intersects(PollFlags::IN | PollFlags::HUP) {
+            let mut chunk = [0u8; 4096];
+            match rustix::io::read(fifo, &mut chunk) {
+                // EOF: init closed its end. Either it said "0" and is exec'ing, or it explained.
+                Ok(0) => return interpret_answer(&answer),
+                Ok(n) => answer.extend_from_slice(&chunk[..n]),
                 Err(Errno::AGAIN | Errno::INTR) => {}
                 Err(e) => return Err(e).context(|| "read exec FIFO".into()),
             }
+            continue;
         }
-        if fds[0].revents().contains(PollFlags::HUP) || fds[1].revents().contains(PollFlags::IN) {
+        if fds[1].revents().contains(PollFlags::IN) {
             return Err(Error::InitVanished("init exited instead of starting".into()));
         }
+    }
+}
+
+fn interpret_answer(answer: &[u8]) -> Result<()> {
+    match answer.split_first() {
+        Some((b'0', _)) => Ok(()),
+        Some((b'E', message)) => Err(Error::Init {
+            stage: crate::sync::Stage::Hooks,
+            message: String::from_utf8_lossy(message).into_owned(),
+            exit_code: None,
+        }),
+        _ => Err(Error::InitVanished("init closed the exec FIFO without starting".into())),
     }
 }
 
@@ -119,7 +136,9 @@ pub fn kill(store: &StateStore, id: &ContainerId, signal: Signal) -> Result<()> 
 /// A `created` container is killed and removed without `force`, like runc does: it never ran.
 pub fn delete(store: &StateStore, id: &ContainerId, force: bool) -> Result<()> {
     let dir = store.open(id)?;
-    let state = store.load(id)?;
+    let mut state = store.load(id)?;
+    // Read before the state directory (and the stored copy) is removed.
+    let spec = store.load_config(id);
     match state.status {
         Status::Stopped => {}
         Status::Created | Status::Creating => kill_and_wait(&state)?,
@@ -131,7 +150,18 @@ pub fn delete(store: &StateStore, id: &ContainerId, force: bool) -> Result<()> {
             )));
         }
     }
-    dir.destroy()
+    dir.destroy()?;
+    // poststop runs after the container is gone, in the runtime's namespaces.
+    match spec {
+        Ok(spec) => {
+            state.status = Status::Stopped;
+            crate::hooks::run(crate::hooks::Phase::Poststop, &spec, &state)
+        }
+        Err(e) => {
+            tracing::warn!("cannot run poststop hooks: {}", crate::render_chain(&e));
+            Ok(())
+        }
+    }
 }
 
 fn kill_and_wait(state: &State) -> Result<()> {

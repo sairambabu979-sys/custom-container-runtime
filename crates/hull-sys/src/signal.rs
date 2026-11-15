@@ -100,6 +100,26 @@ pub fn read_signalfd(fd: BorrowedFd<'_>) -> io::Result<i32> {
     i32::try_from(info.ssi_signo).map_err(|_| io::Error::other("bad signal number"))
 }
 
+/// Make `command`'s child start with no blocked signals.
+///
+/// The runtime blocks the signals it forwards (so it can read them from a signalfd), and a
+/// blocked mask is inherited across `fork` and `execve`. A hook spawned with that mask could not
+/// be interrupted or stopped by those signals. This clears the mask in the child between `fork`
+/// and `execve`.
+pub fn clear_mask_in_child(command: &mut std::process::Command) {
+    use std::os::unix::process::CommandExt;
+    // SAFETY: the closure runs in the forked child before `execve`, where only async-signal-safe
+    // operations are allowed. It calls sigemptyset and sigprocmask, which are async-signal-safe,
+    // and it neither allocates nor takes locks.
+    unsafe {
+        command.pre_exec(|| {
+            let empty = SigSet::empty();
+            libc::sigprocmask(libc::SIG_SETMASK, &raw const empty.0, std::ptr::null_mut());
+            Ok(())
+        });
+    }
+}
+
 /// Reset every catchable signal to its default disposition.
 ///
 /// Signal numbers the C library reserves for itself (glibc uses 32 and 33) are skipped

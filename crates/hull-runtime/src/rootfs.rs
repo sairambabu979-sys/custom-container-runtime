@@ -46,8 +46,11 @@ pub struct RootfsPlan {
     pub user_namespace: bool,
 }
 
-/// Build the root filesystem and switch into it.
-pub fn setup(plan: &RootfsPlan, spec: &Spec) -> Result<()> {
+/// Steps 1–4: build the root filesystem, still seen from the host's root.
+///
+/// The split from [`switch_root`] exists for hooks: `createRuntime` and `createContainer` run
+/// after the mounts exist but before `pivot_root` (runtime-spec `config.md`, "Hooks").
+pub fn mount_all(plan: &RootfsPlan, spec: &Spec) -> Result<()> {
     // 1. Stop propagation towards the host.
     rustix::mount::mount_change(
         "/",
@@ -72,8 +75,11 @@ pub fn setup(plan: &RootfsPlan, spec: &Spec) -> Result<()> {
     // 4. Devices. Re-open the root: /dev may now be a tmpfs mounted over the image's /dev.
     let root = SafeRoot::open(&plan.rootfs)
         .context(|| format!("reopen rootfs {}", plan.rootfs.display()))?;
-    create_default_devices(&root, plan.user_namespace)?;
+    create_default_devices(&root, plan.user_namespace)
+}
 
+/// Steps 5–6: make the root filesystem `/` and finish its flags.
+pub fn switch_root(plan: &RootfsPlan, spec: &Spec) -> Result<()> {
     // 5. Switch roots.
     pivot_into(&plan.rootfs)?;
 

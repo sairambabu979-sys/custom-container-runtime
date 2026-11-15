@@ -39,6 +39,18 @@ pub enum Error {
         /// The exit code to use, if the failure maps to one (126/127 for exec failures).
         exit_code: Option<i32>,
     },
+    /// A hook failed.
+    #[error("{phase} hook #{index} ({path}) failed: {message}")]
+    Hook {
+        /// The phase (`createRuntime`, ...).
+        phase: &'static str,
+        /// The hook's position within its phase.
+        index: usize,
+        /// The hook's path.
+        path: String,
+        /// What went wrong (exit status, stderr, timeout).
+        message: String,
+    },
     /// The init process disappeared without explaining why.
     #[error("container init exited during setup without reporting an error ({0})")]
     InitVanished(String),
